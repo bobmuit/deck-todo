@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Vinkje: a ticked circle, as in the task list, with a twinkle for the star. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,28a26,26 0,1 1,0 52a26,26 0,1 1,0 -52z" />
+    <path
+        android:strokeColor="#FF2564CF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M42,55.5L50.5,64L67,46" />
+    <path
+        android:fillColor="#FFFFD54F"
+        android:pathData="M74,26Q75,32 80,33Q75,34 74,40Q73,34 68,33Q73,32 74,26z" />
+    <path
+        android:fillColor="#B3FFFFFF"
+        android:pathData="M33,29Q33.6,32.4 37,33Q33.6,33.6 33,37Q32.4,33.6 29,33Q32.4,32.4 33,29z" />
+</vector>

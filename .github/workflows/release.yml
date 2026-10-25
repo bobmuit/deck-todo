@@ -1,0 +1,40 @@
+name: Release
+
+# Push a tag like v0.2.0: CI builds the signed APK and publishes it as a GitHub
+# release, where Obtainium finds it.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build signed APK
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          export RELEASE_KEYSTORE="$RUNNER_TEMP/release.jks"
+          echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$RELEASE_KEYSTORE"
+          ./gradlew :domain:test :deck-api:test :importer:test :app:assembleRelease -PversionName="$version" --console=plain
+          rm -f "$RELEASE_KEYSTORE"
+          mv app/build/outputs/apk/release/app-release.apk "vinkje-$version.apk"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" "vinkje-$version.apk" --title "Vinkje $version" --notes-from-tag
