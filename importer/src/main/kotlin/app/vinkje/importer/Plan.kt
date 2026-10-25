@@ -42,6 +42,8 @@ data class PlanList(
     /** A title from [Plan.groups], or null for a list outside any group (on the account's own "Lijsten" board). */
     val group: String? = null,
     val skip: Boolean = false,
+    /** Overrides [Plan.importCompleted] for this list, e.g. false for a shopping list with years of ticked items. */
+    val importCompleted: Boolean? = null,
     /** Written by `scan`, for the person editing the plan; ignored by `run`. */
     val info: String = "",
 )

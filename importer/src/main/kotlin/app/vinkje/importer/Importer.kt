@@ -171,7 +171,7 @@ class Importer(
             val prev = state.tasks[task.id]
             val cardId: Long = when {
                 prev == null -> {
-                    if (content.done != null && !plan.importCompleted) continue
+                    if (content.done != null && !(list.importCompleted ?: plan.importCompleted)) continue
                     totals.created++
                     if (stack == null || boardId == null) continue
                     create(client, boardId, stack.id, order, content) { importantLabel }.also { id ->
