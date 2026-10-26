@@ -37,8 +37,9 @@ data class HomeLayout(val pinned: List<Long>, val top: List<Top>) {
     /**
      * The row with key [from] moved to where [to] is, or null when that crosses a level: pinned
      * lists among themselves, a group's lists within the group, and lists outside a group and
-     * groups among each other. Dropped on a list inside another group, a top-level row takes
-     * that group's place, so it never lands in the middle of a group.
+     * groups among each other. A top-level row passes a whole group at once, never landing in
+     * the middle of it: going down when it reaches the group's last row, going up when it
+     * reaches the heading. Then it lands where it is dragged, so it does not jump back.
      */
     fun move(from: String, to: String): HomeLayout? {
         val rows = rows()
@@ -53,15 +54,21 @@ data class HomeLayout(val pinned: List<Long>, val top: List<Top>) {
                 })
             }
             is Row.Loose, is Row.Group -> {
-                val target = when (b) {
-                    is Row.Pinned -> return null
-                    is Row.Loose -> topIndex { it is Top.Loose && it.listId == b.listId }
-                    is Row.Group -> topIndex { it is Top.Group && it.groupId == b.groupId }
-                    is Row.GroupList -> topIndex { it is Top.Group && it.groupId == b.groupId }
-                }
                 val source = when (a) {
                     is Row.Loose -> topIndex { it is Top.Loose && it.listId == a.listId }
                     else -> topIndex { it is Top.Group && it.groupId == (a as Row.Group).groupId }
+                }
+                val target = when (b) {
+                    is Row.Pinned -> return null
+                    is Row.Loose -> topIndex { it is Top.Loose && it.listId == b.listId }
+                    is Row.Group, is Row.GroupList -> {
+                        val groupId = if (b is Row.Group) b.groupId else (b as Row.GroupList).groupId
+                        val index = topIndex { it is Top.Group && it.groupId == groupId }
+                        val lists = (top[index] as Top.Group).lists
+                        val reached = if (source < index) b.key == (lists.lastOrNull()?.let { "l$it" } ?: "g$groupId") else b is Row.Group
+                        if (!reached) return null
+                        index
+                    }
                 }
                 if (source == target) null else copy(top = top.moved(source, target))
             }

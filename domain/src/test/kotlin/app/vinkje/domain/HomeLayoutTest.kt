@@ -49,9 +49,14 @@ class HomeLayoutTest {
     }
 
     @Test
-    fun `a loose list moves between groups`() {
-        val moved = layout.move("l1", "g10")!!
+    fun `a loose list moves down past a group when it reaches the group's last list`() {
+        assertNull(layout.move("l1", "g10"))
+        assertNull(layout.move("l1", "l2"))
+        val moved = layout.move("l1", "l3")!!
         assertEquals(listOf("p1", "p2", "g10", "l2", "l3", "l1", "g20", "l4", "l5"), moved.keys())
+        // Now just below Klussen, it does not jump back over Huis.
+        assertNull(moved.move("l1", "l3"))
+        assertNull(moved.move("l1", "l2"))
     }
 
     @Test
@@ -61,10 +66,20 @@ class HomeLayoutTest {
     }
 
     @Test
-    fun `dropped on a list inside another group, a top-level row takes that group's place`() {
-        // Dragging Werk up, it first meets Klussen, the last list of Huis.
-        val moved = layout.move("g20", "l3")!!
+    fun `a top-level row moves up past a group when it reaches the heading`() {
+        // Dragging Werk up, it first meets Klussen and Boodschappen, the lists of Huis.
+        assertNull(layout.move("g20", "l3"))
+        assertNull(layout.move("g20", "l2"))
+        val moved = layout.move("g20", "g10")!!
         assertEquals(listOf("p1", "p2", "l1", "g20", "l4", "l5", "g10", "l2", "l3"), moved.keys())
+        // Now just above Huis, it does not jump back down.
+        assertNull(moved.move("g20", "g10"))
+    }
+
+    @Test
+    fun `a group without lists is passed at its heading`() {
+        val empty = HomeLayout(emptyList(), listOf(Top.Loose(1), Top.Group(10, emptyList(), canReorder = true)))
+        assertEquals(listOf("g10", "l1"), empty.move("l1", "g10")!!.keys())
     }
 
     @Test
