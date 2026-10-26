@@ -57,6 +57,8 @@ fun ArrangeScreen(repo: TodoRepository, home: HomeData, onDone: () -> Unit) {
     var layout by remember { mutableStateOf(repo.layout(home)) }
     /** The group being dragged: its lists are left out, so it moves as one row. */
     var draggedGroup by remember { mutableStateOf<Long?>(null) }
+    /** The key of the row being dragged. */
+    var dragged by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val reorder = rememberReorderableLazyListState(listState) { from, to ->
@@ -66,6 +68,11 @@ fun ArrangeScreen(repo: TodoRepository, home: HomeData, onDone: () -> Unit) {
     val lists = home.lists.associateBy { it.id }
     val done: () -> Unit = { scope.launch { repo.saveLayout(layout); onDone() } }
     val (pinnedRows, rows) = layout.rows(draggedGroup).partition { it is HomeLayout.Row.Pinned }
+    // Only rows the dragged row may move to are targets. Reorderable takes a refused move for one
+    // that is still on its way: the dragged row then lags behind the finger, a bit more with every
+    // refusal, and never reaches the end of a group to pass it.
+    fun isTarget(key: String) = dragged.let { it == null || it == key || layout.move(it, key) != null }
+    val onDragging = { key: String -> { started: Boolean -> dragged = key.takeIf { started } } }
     BackHandler(onBack = done)
 
     Scaffold(
@@ -82,15 +89,15 @@ fun ArrangeScreen(repo: TodoRepository, home: HomeData, onDone: () -> Unit) {
                 items(pinnedRows, key = { it.key }) { row ->
                     val list = lists[(row as HomeLayout.Row.Pinned).listId] ?: return@items
                     val group = groups[list.groupId] ?: return@items
-                    ReorderableItem(reorder, row.key) { dragging ->
+                    ReorderableItem(reorder, row.key, enabled = isTarget(row.key)) { dragging ->
                         ArrangeListRow(list, group, subtitle = group.title.takeUnless { repo.isLoose(group) }, dragging, pinned = true, draggable = true,
-                            onPin = { layout = layout.pin(list.id, false) })
+                            onPin = { layout = layout.pin(list.id, false) }, onDragging = onDragging(row.key))
                     }
                 }
                 item(key = "divider") { HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
             }
             items(rows, key = { it.key }) { row ->
-                ReorderableItem(reorder, row.key) { dragging ->
+                ReorderableItem(reorder, row.key, enabled = isTarget(row.key)) { dragging ->
                     when (row) {
                         is HomeLayout.Row.Group -> {
                             val group = groups[row.groupId] ?: return@ReorderableItem
@@ -105,7 +112,10 @@ fun ArrangeScreen(repo: TodoRepository, home: HomeData, onDone: () -> Unit) {
                                         color = deckColor(group.color, MaterialTheme.colorScheme.primary),
                                         modifier = Modifier.weight(1f),
                                     )
-                                    DragHandle(onDragStarted = { draggedGroup = group.id }, onDragStopped = { draggedGroup = null })
+                                    DragHandle(
+                                        onDragStarted = { draggedGroup = group.id; dragged = row.key },
+                                        onDragStopped = { draggedGroup = null; dragged = null },
+                                    )
                                 }
                             }
                         }
@@ -115,7 +125,7 @@ fun ArrangeScreen(repo: TodoRepository, home: HomeData, onDone: () -> Unit) {
                             val group = groups[list.groupId] ?: return@ReorderableItem
                             val pinned = layout.isPinned(id)
                             ArrangeListRow(list, group, subtitle = null, dragging, pinned, draggable = row !is HomeLayout.Row.GroupList || row.canReorder,
-                                onPin = { layout = layout.pin(id, !pinned) })
+                                onPin = { layout = layout.pin(id, !pinned) }, onDragging = onDragging(row.key))
                         }
                         is HomeLayout.Row.Pinned -> {}
                     }
@@ -144,6 +154,7 @@ private fun ReorderableCollectionItemScope.ArrangeListRow(
     pinned: Boolean,
     draggable: Boolean,
     onPin: () -> Unit,
+    onDragging: (Boolean) -> Unit,
 ) {
     Surface(shadowElevation = if (dragging) 4.dp else 0.dp) {
         Row(modifier = Modifier.fillMaxWidth().padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -161,7 +172,7 @@ private fun ReorderableCollectionItemScope.ArrangeListRow(
                 )
             }
             // Deck lets only those who manage a board reorder its stacks.
-            if (draggable) DragHandle() else Spacer(Modifier.size(48.dp))
+            if (draggable) DragHandle(onDragStarted = { onDragging(true) }, onDragStopped = { onDragging(false) }) else Spacer(Modifier.size(48.dp))
         }
     }
 }
