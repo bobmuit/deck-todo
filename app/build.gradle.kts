@@ -88,6 +88,7 @@ dependencies {
     implementation(libs.coroutines.android)
     implementation(libs.compose.material.icons)
     implementation(libs.browser)
+    implementation(libs.reorderable)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.compose.bom))

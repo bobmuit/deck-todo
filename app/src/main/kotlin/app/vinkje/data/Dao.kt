@@ -7,6 +7,7 @@ import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
 import androidx.room.Upsert
+import app.vinkje.domain.HomeLayout
 import kotlinx.coroutines.flow.Flow
 
 data class ListWithCount(
@@ -14,6 +15,9 @@ data class ListWithCount(
     val groupId: Long,
     val title: String,
     val openCount: Int,
+    val order: Int,
+    val position: Int?,
+    val pinned: Int?,
 )
 
 /** A task with the list it lives in, for the smart lists that mix lists. */
@@ -44,7 +48,7 @@ interface TodoDao {
     fun groups(): Flow<List<GroupEntity>>
 
     @Query(
-        """SELECT l.id, l.groupId, l.title,
+        """SELECT l.id, l.groupId, l.title, l.`order`, l.position, l.pinned,
            (SELECT COUNT(*) FROM tasks t WHERE t.listId = l.id AND t.doneEpochSecond IS NULL AND NOT t.deleted) AS openCount
            FROM lists l WHERE NOT l.deleted ORDER BY l.`order`, l.id"""
     )
@@ -123,6 +127,7 @@ interface TodoDao {
     @Query("SELECT MAX(`order`) FROM lists WHERE groupId = :groupId AND NOT deleted") suspend fun maxListOrder(groupId: Long): Int?
     @Query("SELECT * FROM groups WHERE title = :title AND ownerUid = :uid AND NOT deleted ORDER BY id LIMIT 1") suspend fun ownedGroupTitled(title: String, uid: String): GroupEntity?
     @Query("SELECT COUNT(*) FROM groups") suspend fun groupCount(): Int
+    @Query("SELECT MAX(pinned) FROM lists WHERE NOT deleted") suspend fun maxPinned(): Int?
 
     // --- writes ---
 
@@ -140,6 +145,10 @@ interface TodoDao {
     @Query("DELETE FROM groups WHERE id = :id") suspend fun deleteGroup(id: Long)
     @Query("UPDATE groups SET hidden = :hidden WHERE id = :id") suspend fun setGroupHidden(id: Long, hidden: Boolean)
     @Query("DELETE FROM lists WHERE id = :id") suspend fun deleteList(id: Long)
+    @Query("UPDATE groups SET position = :position WHERE id = :id") suspend fun setGroupPosition(id: Long, position: Int?)
+    @Query("UPDATE lists SET position = :position WHERE id = :id") suspend fun setListPosition(id: Long, position: Int?)
+    @Query("UPDATE lists SET pinned = :pinned WHERE id = :id") suspend fun setListPinned(id: Long, pinned: Int?)
+    @Query("UPDATE lists SET pinned = NULL") suspend fun unpinAll()
 
     // --- outbox ---
 
@@ -181,5 +190,37 @@ interface TodoDao {
         val current = group(id) ?: return
         updateGroup(change(current))
         if (pendingOfKind(id, OutboxEntity.Kind.GROUP_UPDATE) == 0) enqueue(OutboxEntity(kind = OutboxEntity.Kind.GROUP_UPDATE, rowId = id))
+    }
+
+    /**
+     * Stores what "Volgorde aanpassen" ended with. Places and pins stay on this phone; the
+     * order of lists within a board goes to Deck as stack order, but only where it changed,
+     * so saving an untouched layout sends nothing. Returns whether anything was queued.
+     */
+    @Transaction
+    suspend fun saveLayout(layout: HomeLayout): Boolean {
+        layout.top.forEachIndexed { place, item ->
+            when (item) {
+                is HomeLayout.Top.Loose -> setListPosition(item.listId, place)
+                is HomeLayout.Top.Group -> setGroupPosition(item.groupId, place)
+            }
+        }
+        unpinAll()
+        layout.pinned.forEachIndexed { place, id -> setListPinned(id, place) }
+
+        val loose = layout.top.filterIsInstance<HomeLayout.Top.Loose>().map { it.listId }
+        val grouped = layout.top.filterIsInstance<HomeLayout.Top.Group>().filter { it.canReorder }.map { it.lists }
+        var queued = false
+        for (ids in grouped + listOf(loose)) {
+            val lists = ids.mapNotNull { listNow(it) }
+            if (lists.zipWithNext().all { (a, b) -> a.order < b.order }) continue
+            lists.forEachIndexed { order, list ->
+                if (list.order != order) {
+                    editList(list.id) { it.copy(order = order) }
+                    queued = true
+                }
+            }
+        }
+        return queued
     }
 }

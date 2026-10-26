@@ -205,14 +205,21 @@ class GraphClient(
         return all
     }
 
-    /** Retries throttling (429) and brief outages, and renews the token once on a 401. */
+    /** Retries throttling (429), brief outages and network errors such as timeouts, and renews the token once on a 401. */
     private fun get(url: HttpUrl): String {
         var renew = false
         var renewed = false
         repeat(MAX_TRIES) { attempt ->
             val token = accessToken(renew).also { renew = false }
             val req = Request.Builder().url(url).header("Authorization", "Bearer $token").get().build()
-            http.newCall(req).execute().use { resp ->
+            val call = try {
+                http.newCall(req).execute()
+            } catch (e: IOException) {
+                if (attempt == MAX_TRIES - 1) throw e
+                sleep((2L shl attempt) * 1000)
+                return@repeat
+            }
+            call.use { resp ->
                 val body = resp.body?.string().orEmpty()
                 when {
                     resp.isSuccessful -> return body

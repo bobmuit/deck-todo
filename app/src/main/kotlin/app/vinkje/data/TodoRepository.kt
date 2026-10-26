@@ -17,6 +17,7 @@ import kotlinx.coroutines.withContext
 import app.vinkje.deck.DeckClient
 import app.vinkje.deck.User
 import app.vinkje.domain.DeckConventions
+import app.vinkje.domain.HomeLayout
 import app.vinkje.domain.Recurrence
 import app.vinkje.domain.Recurring
 import app.vinkje.domain.TaskBody
@@ -91,6 +92,27 @@ class TodoRepository(
     suspend fun setGroupHidden(id: Long, hidden: Boolean) = dao.setGroupHidden(id, hidden)
     suspend fun setGroupCollapsed(id: Long, collapsed: Boolean) = dao.setGroupCollapsed(id, collapsed)
 
+    /**
+     * The home screen's order. Lists outside a group and groups share one level; until
+     * arranged, the lists outside a group come first in Deck order, then the groups by title.
+     */
+    fun layout(home: HomeData): HomeLayout {
+        val (loose, grouped) = home.groups.partition(::isLoose)
+        val looseIds = loose.map { it.id }.toSet()
+        val top = home.lists.filter { it.groupId in looseIds }.map { it.position to HomeLayout.Top.Loose(it.id) } +
+            grouped.map { group -> group.position to HomeLayout.Top.Group(group.id, home.lists.filter { it.groupId == group.id }.map { it.id }, group.canManage) }
+        val groupIds = home.groups.map { it.id }.toSet()
+        val pinned = home.lists.filter { it.pinned != null && it.groupId in groupIds }.sortedBy { it.pinned }.map { it.id }
+        return HomeLayout(pinned, HomeLayout.byPosition(top) { it.first }.map { it.second })
+    }
+
+    suspend fun saveLayout(layout: HomeLayout) {
+        if (dao.saveLayout(layout)) scheduler.kick()
+    }
+
+    /** Pinned at the bottom of the pinned lists, on this phone only. */
+    suspend fun setPinned(listId: Long, pinned: Boolean) = dao.setListPinned(listId, if (pinned) (dao.maxPinned() ?: -1) + 1 else null)
+
     // ---------------------------------------------------------------- lists and groups
 
     /** A new list at the bottom of [groupId], or among the lists outside any group. */
@@ -126,6 +148,8 @@ class TodoRepository(
                 groupId = target,
                 serverGroupId = list.homeGroupId.takeIf { it != target },
                 order = (dao.maxListOrder(target) ?: -1) + 1,
+                // Out of a group it goes to the bottom, not to where it once was.
+                position = null,
             )
         )
         dao.enqueue(OutboxEntity(kind = OutboxEntity.Kind.LIST_MOVE, rowId = id))

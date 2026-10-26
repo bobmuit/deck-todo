@@ -115,8 +115,9 @@ fun ListScreen(repo: TodoRepository, listId: Long, onBack: () -> Unit, onOpenTas
                 },
                 actions = {
                     // Deck lets only those who manage a board rename, move or remove its stacks;
-                    // removing cards only needs edit rights.
+                    // removing cards only needs edit rights. Pinning is this phone's own business.
                     val items = buildList {
+                        if (list != null) add("pin" to if (list?.pinned != null) "Losmaken van startscherm" else "Vastpinnen op startscherm")
                         if (group?.canEdit == true && doneCount > 0) add("clearDone" to "Voltooide taken verwijderen")
                         if (group?.canManage == true) addAll(listOf("rename" to "Naam wijzigen", "move" to "Verplaatsen naar groep", "delete" to "Lijst verwijderen"))
                     }
@@ -125,7 +126,10 @@ fun ListScreen(repo: TodoRepository, listId: Long, onBack: () -> Unit, onOpenTas
                             IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, contentDescription = "Lijstopties") }
                             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                                 for ((key, label) in items) {
-                                    DropdownMenuItem(text = { Text(label) }, onClick = { menu = false; dialog = key })
+                                    DropdownMenuItem(text = { Text(label) }, onClick = {
+                                        menu = false
+                                        if (key == "pin") scope.launch { repo.setPinned(listId, list?.pinned == null) } else dialog = key
+                                    })
                                 }
                             }
                         }
