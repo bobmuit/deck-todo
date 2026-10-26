@@ -37,4 +37,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
+          # checkout leaves the tag lightweight, so --notes-from-tag would take the commit message.
+          git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
           gh release create "$GITHUB_REF_NAME" "vinkje-$version.apk" --title "Vinkje $version" --notes-from-tag
