@@ -70,6 +70,14 @@ a long press offers a new list in it, renaming, sharing, hiding it on this phone
 deleting it. A list's menu renames, moves or deletes it. All of it works offline and
 reaches Deck in the order it was done.
 
+"Volgorde aanpassen" in the home screen's menu puts drag handles on the rows. Lists
+outside a group and groups share one level and can be mixed; a group's lists move within
+it. The order of a group's lists is Deck's stack order, so it changes for everyone the
+group is shared with (and needs the same manage right as renaming). Deck has no order for
+boards, so the order of that top level stays on the phone, like folding and hiding. So
+does pinning: the pin button there, or "Vastpinnen op startscherm" in a list's menu, puts
+a list on top, under the smart lists, while it also keeps its own place.
+
 Deck cannot move a stack to another board, so moving a list to another group makes a
 new stack there, moves the cards over one by one and deletes the old stack. A card PUT
 to a stack on another board moves it; Deck carries labels over by title (creating

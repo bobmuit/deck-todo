@@ -38,6 +38,11 @@ data class GroupEntity(
     @ColumnInfo(defaultValue = "0") val deleted: Boolean = false,
     /** Folded shut on the home screen of this phone; never synced. */
     @ColumnInfo(defaultValue = "0") val collapsed: Boolean = false,
+    /**
+     * Place on the home screen of this phone, among groups and lists outside any group;
+     * null until arranged. Deck has no order for boards, so this is never synced.
+     */
+    val position: Int? = null,
 ) {
     companion object {
         const val LOOSE_TITLE = DeckConventions.LOOSE_BOARD
@@ -71,6 +76,10 @@ data class ListEntity(
      */
     val serverGroupId: Long? = null,
     @ColumnInfo(defaultValue = "0") val deleted: Boolean = false,
+    /** As [GroupEntity.position], for a list outside any group; within a group [order] decides. */
+    val position: Int? = null,
+    /** Place among the lists pinned to the top of the home screen; null when not pinned. Never synced. */
+    val pinned: Int? = null,
 ) {
     val homeGroupId get() = serverGroupId ?: groupId
 }

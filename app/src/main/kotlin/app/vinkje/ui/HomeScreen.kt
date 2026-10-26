@@ -58,6 +58,7 @@ import app.vinkje.R
 import app.vinkje.data.GroupEntity
 import app.vinkje.data.ListWithCount
 import app.vinkje.data.TodoRepository
+import app.vinkje.domain.HomeLayout
 
 /** What the home screen is asking about in a dialog. */
 private sealed interface HomeDialog {
@@ -69,9 +70,10 @@ private sealed interface HomeDialog {
 }
 
 /**
- * The To Do sidebar as a screen: the smart lists, then the lists outside any group, then
- * the groups (Deck boards) with their lists (stacks). A tap on a group folds it; a long
- * press opens what can be done with it.
+ * The To Do sidebar as a screen: the smart lists and the pinned lists, then the lists
+ * outside any group and the groups (Deck boards) with their lists (stacks), in the order
+ * set with "Volgorde aanpassen". A tap on a group folds it; a long press opens what can
+ * be done with it.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -95,10 +97,17 @@ fun HomeScreen(
     var menu by remember { mutableStateOf(false) }
     var confirmLogOut by remember { mutableStateOf(false) }
     var dialog by remember { mutableStateOf<HomeDialog?>(null) }
+    var arranging by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val hiddenCount = groups.count { it.hidden }
-    val (loose, grouped) = groups.partition { repo.isLoose(it) }
+    val layout = remember(home) { home?.let(repo::layout) }
+    val groupsById = groups.associateBy { it.id }
+    val listsById = lists.associateBy { it.id }
+    // Pinned lists show even when their group is folded, but not when it is hidden.
+    val pinned = layout?.pinned.orEmpty().mapNotNull { id ->
+        listsById[id]?.let { list -> groupsById[list.groupId]?.takeIf { !it.hidden }?.let { list to it } }
+    }
 
     LaunchedEffect(Unit) { repo.syncNow() }
     LaunchedEffect(refreshing) {
@@ -106,6 +115,13 @@ fun HomeScreen(
             repo.syncNow()
             delay(1200)
             refreshing = false
+        }
+    }
+
+    home?.let { h ->
+        if (arranging) {
+            ArrangeScreen(repo, h, onDone = { arranging = false })
+            return
         }
     }
 
@@ -120,6 +136,7 @@ fun HomeScreen(
                     Box {
                         IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, contentDescription = "Meer") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            if (groups.isNotEmpty()) MenuItem("Volgorde aanpassen") { menu = false; arranging = true }
                             MenuItem("Uitloggen") { menu = false; confirmLogOut = true }
                         }
                     }
@@ -164,6 +181,9 @@ fun HomeScreen(
                             if (count > 0) Text("$count", style = MaterialTheme.typography.bodyMedium)
                         }
                     }
+                    items(pinned, key = { (list, _) -> "p${list.id}" }) { (list, group) ->
+                        ListRow(list, group, onOpenList, subtitle = group.title.takeUnless { repo.isLoose(group) })
+                    }
                     item(key = "divider") { HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
                     if (groups.isEmpty()) {
                         item {
@@ -174,10 +194,15 @@ fun HomeScreen(
                             )
                         }
                     }
-                    for (group in loose) {
-                        items(lists.filter { it.groupId == group.id }, key = { "l${it.id}" }) { list -> ListRow(list, group, onOpenList) }
-                    }
-                    for (group in grouped.filter { showHidden || !it.hidden }) {
+                    for (top in layout?.top.orEmpty()) {
+                        if (top is HomeLayout.Top.Loose) {
+                            val list = listsById[top.listId] ?: continue
+                            val group = groupsById[list.groupId] ?: continue
+                            item(key = "l${list.id}") { ListRow(list, group, onOpenList) }
+                            continue
+                        }
+                        val group = groupsById[(top as HomeLayout.Top.Group).groupId] ?: continue
+                        if (group.hidden && !showHidden) continue
                         item(key = "g${group.id}") {
                             GroupHeader(
                                 group = group,
@@ -191,7 +216,7 @@ fun HomeScreen(
                             )
                         }
                         if (!group.collapsed) {
-                            items(lists.filter { it.groupId == group.id }, key = { "l${it.id}" }) { list -> ListRow(list, group, onOpenList) }
+                            items(top.lists.mapNotNull(listsById::get), key = { "l${it.id}" }) { list -> ListRow(list, group, onOpenList) }
                         }
                     }
                     if (hiddenCount > 0) {
@@ -263,14 +288,18 @@ private fun LoginExpiredBanner(pending: Int, onLogInAgain: () -> Unit) {
 }
 
 @Composable
-private fun ListRow(list: ListWithCount, group: GroupEntity, onOpenList: (Long) -> Unit) {
+private fun ListRow(list: ListWithCount, group: GroupEntity, onOpenList: (Long) -> Unit, subtitle: String? = null) {
     Row(
         modifier = Modifier.fillMaxWidth().clickable { onOpenList(list.id) }.padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.AutoMirrored.Outlined.List, contentDescription = null, tint = deckColor(group.color, MaterialTheme.colorScheme.primary))
         Spacer(Modifier.width(16.dp))
-        Text(list.title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(list.title, style = MaterialTheme.typography.bodyLarge)
+            // Which group a pinned list is in, so two lists with the same name can be told apart.
+            if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         if (list.openCount > 0) Text("${list.openCount}", style = MaterialTheme.typography.bodyMedium)
     }
 }
