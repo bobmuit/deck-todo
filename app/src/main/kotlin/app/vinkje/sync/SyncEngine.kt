@@ -565,7 +565,7 @@ class SyncEngine(
      * others went with the stack. Their creates are queued again after the list's own.
      */
     private suspend fun remakeList(list: ListEntity, unsent: List<TaskEntity>) {
-        log("Lijst „${list.title}” (${list.serverId}) staat niet meer in Deck; opnieuw gemaakt voor ${unsent.size} taken van deze telefoon: ${unsent.joinToString { "„${it.title}”" }}")
+        log("Lijst „${list.title}” (${list.serverId}) staat niet meer in Deck; opnieuw gemaakt voor ${unsent.size} ${if (unsent.size == 1) "taak" else "taken"} van deze telefoon: ${unsent.joinToString { "„${it.title}”" }}")
         val keep = unsent.map { it.id }.toSet()
         dao.tasksOf(list.id).filter { it.id !in keep }.forEach { dao.deleteTask(it.id) }
         dao.updateList(list.copy(serverId = null, serverGroupId = null))
