@@ -274,8 +274,11 @@ fun TaskColumn(
                 Text(emptyText, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
             }
         }
+        // Open and done rows have their own keys: the list keeps its scroll position on the
+        // key of the top row, so with a shared key ticking that row off would scroll along
+        // with it down to "Voltooid".
         if (sectionOf == null) {
-            items(open, key = { it.id }) { Item(it, Modifier.animateItem()) }
+            items(open, key = { "open-${it.id}" }) { Item(it, Modifier.animateItem()) }
         } else {
             for ((section, sectionTasks) in open.groupBy(sectionOf)) {
                 item(key = "section-$section") {
@@ -284,7 +287,7 @@ fun TaskColumn(
                         modifier = Modifier.animateItem().padding(start = 4.dp, top = 12.dp, bottom = 4.dp),
                     )
                 }
-                items(sectionTasks, key = { it.id }) { Item(it, Modifier.animateItem()) }
+                items(sectionTasks, key = { "open-${it.id}" }) { Item(it, Modifier.animateItem()) }
             }
         }
         if (done.isNotEmpty()) {
@@ -298,7 +301,7 @@ fun TaskColumn(
                 }
             }
             if (doneExpanded) {
-                items(done, key = { it.id }) { Item(it, Modifier.animateItem()) }
+                items(done, key = { "done-${it.id}" }) { Item(it, Modifier.animateItem()) }
             }
         }
     }
