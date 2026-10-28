@@ -78,6 +78,7 @@ fun SmartListScreen(repo: TodoRepository, kind: SmartList, onBack: () -> Unit, o
 
     val lists by repo.writableLists().collectAsStateWithLifecycle(emptyList())
     var destination by remember { mutableStateOf<Long?>(null) }
+    var added by remember { mutableStateOf<Long?>(null) }
     LaunchedEffect(lists) {
         if (destination == null || lists.none { it.id == destination }) destination = repo.defaultListId()
     }
@@ -104,7 +105,7 @@ fun SmartListScreen(repo: TodoRepository, kind: SmartList, onBack: () -> Unit, o
                 AddTaskBar(
                     onAdd = { title ->
                         scope.launch {
-                            repo.addTask(
+                            added = repo.addTask(
                                 target, title,
                                 important = kind == SmartList.IMPORTANT,
                                 due = if (kind == SmartList.PLANNED) today else null,
@@ -129,6 +130,7 @@ fun SmartListScreen(repo: TodoRepository, kind: SmartList, onBack: () -> Unit, o
             listTitles = listTitles,
             sectionOf = if (kind == SmartList.PLANNED) { task -> plannedSection(task, today) } else null,
             emptyText = kind.empty,
+            reveal = added,
         )
     }
 }

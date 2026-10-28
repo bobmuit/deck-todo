@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -54,13 +55,13 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -104,6 +105,7 @@ fun ListScreen(repo: TodoRepository, listId: Long, onBack: () -> Unit, onOpenTas
     val scope = rememberCoroutineScope()
     var menu by remember { mutableStateOf(false) }
     var dialog by remember { mutableStateOf<String?>(null) }
+    var added by remember { mutableStateOf<Long?>(null) }
     val doneCount = tasks.orEmpty().count { it.doneEpochSecond != null }
 
     Scaffold(
@@ -138,9 +140,9 @@ fun ListScreen(repo: TodoRepository, listId: Long, onBack: () -> Unit, onOpenTas
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
-        bottomBar = { AddTaskBar(onAdd = { title -> scope.launch { repo.addTask(listId, title) } }) },
+        bottomBar = { AddTaskBar(onAdd = { title -> scope.launch { added = repo.addTask(listId, title) } }) },
     ) { padding ->
-        TaskColumn(repo, tasks, snackbar, onOpenTask, Modifier.padding(padding))
+        TaskColumn(repo, tasks, snackbar, onOpenTask, Modifier.padding(padding), reveal = added)
     }
 
     val current = list ?: return
@@ -191,6 +193,9 @@ fun ListScreen(repo: TodoRepository, listId: Long, onBack: () -> Unit, onOpenTas
  * shows under "Voltooid" when [showDone], and otherwise only while it is being ticked.
  * Null means not loaded yet: nothing is drawn, as an empty list would lose the scroll
  * position kept for coming back from a task.
+ *
+ * [reveal] is a task just added from the bar, scrolled into view once it shows up: the
+ * list keeps its top row in place, so a task added above it would land out of sight.
  */
 @Composable
 fun TaskColumn(
@@ -203,12 +208,19 @@ fun TaskColumn(
     listTitles: Map<Long, String>? = null,
     sectionOf: ((TaskEntity) -> String)? = null,
     emptyText: String? = null,
+    reveal: Long? = null,
 ) {
     val tasks = loaded.orEmpty()
     // A just-ticked task stays in place for a moment with its check visible, then moves
-    // to "Voltooid", as in To Do. The database write does not wait for this.
-    val holding = remember { mutableStateListOf<Long>() }
-    val open = tasks.filter { it.doneEpochSecond == null || it.id in holding }
+    // to "Voltooid", as in To Do. The database write does not wait for this. Held here is
+    // its place among the open rows: a list's query sorts done tasks last, and the list
+    // would scroll along if its top row moved to the end.
+    val holding = remember { mutableStateMapOf<Long, Int>() }
+    val open = tasks.filter { it.doneEpochSecond == null && it.id !in holding }.toMutableList().apply {
+        for ((id, index) in holding.entries.sortedBy { it.value }) {
+            tasks.firstOrNull { it.id == id }?.let { add(index.coerceAtMost(size), it) }
+        }
+    }
     val done = if (!showDone) emptyList() else tasks.filter { it.doneEpochSecond != null && it.id !in holding }.sortedByDescending { it.doneEpochSecond }
     var doneExpanded by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -233,7 +245,7 @@ fun TaskColumn(
         ticking[task.id] = nowDone
         haptics.performHapticFeedback(if (nowDone) HapticFeedbackType.Confirm else HapticFeedbackType.ToggleOff)
         if (nowDone) {
-            holding += task.id
+            holding[task.id] = open.indexOfFirst { it.id == task.id }.coerceAtLeast(0)
             scope.launch { delay(450); holding -= task.id }
             scope.launch {
                 val completion = repo.complete(task.id) ?: return@launch
@@ -263,8 +275,31 @@ fun TaskColumn(
         }
     }
 
+    val listState = rememberLazyListState()
+    var revealed by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(reveal, open) {
+        if (reveal == null || reveal == revealed) return@LaunchedEffect
+        // Its index in the LazyColumn below, past the section headings before it.
+        var index = 0
+        for (section in if (sectionOf == null) listOf(open) else open.groupBy(sectionOf).values) {
+            if (sectionOf != null) index++
+            val i = section.indexOfFirst { it.id == reveal }
+            if (i < 0) {
+                index += section.size
+                continue
+            }
+            withFrameNanos {} // the list lays the new row out first
+            val layout = listState.layoutInfo
+            val row = layout.visibleItemsInfo.firstOrNull { it.key == "open-$reveal" }
+            if (row == null || row.offset < 0 || row.offset + row.size > layout.viewportEndOffset) listState.animateScrollToItem(index + i)
+            revealed = reveal
+            return@LaunchedEffect
+        }
+    }
+
     if (loaded == null) return
     LazyColumn(
+        state = listState,
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
