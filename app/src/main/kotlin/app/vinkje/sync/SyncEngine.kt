@@ -30,6 +30,28 @@ import java.time.Instant
 /** Serialises sync rounds, and keeps logging out from wiping the database under one. */
 internal val syncLock = Mutex()
 
+/** What a push does with an op the server refused for good (a 4xx other than 401). */
+internal enum class Refusal {
+    /** Keep it queued and try again later: what it would make exists only on this phone. */
+    POSTPONE,
+    /** Drop the op and fetch every board again, so the server's version comes back. */
+    REFETCH,
+    /** The card is gone already, which is what the delete wanted. */
+    DELETE_LOCAL,
+    /** The delete was not allowed: show the task again, as the server still has it. */
+    UNDELETE,
+}
+
+/**
+ * A refusal may come from a proxy, a Deck app being updated or a stack someone else just
+ * removed, so it never throws away the only copy of something typed on this phone.
+ */
+internal fun refusal(kind: OutboxEntity.Kind, status: Int): Refusal = when (kind) {
+    OutboxEntity.Kind.CREATE, OutboxEntity.Kind.LIST_CREATE, OutboxEntity.Kind.GROUP_CREATE -> Refusal.POSTPONE
+    OutboxEntity.Kind.DELETE -> if (status == 404) Refusal.DELETE_LOCAL else Refusal.UNDELETE
+    else -> Refusal.REFETCH
+}
+
 /**
  * One sync round: push the outbox in order, then pull what changed on the server.
  *
@@ -48,6 +70,8 @@ class SyncEngine(
     private val now: () -> Long = System::currentTimeMillis,
     /** Sets a reminder on a task, as the task screen does; used for reminders from the To Do import. */
     private val adoptReminder: suspend (taskId: Long, atEpochSecond: Long) -> Unit = { _, _ -> },
+    /** Notes what was refused or removed, see [SyncLog]. */
+    private val log: (String) -> Unit = {},
 ) {
     /**
      * Returns the delay in ms until deferred work (deletes still inside their undo window) is due, or null.
@@ -62,7 +86,8 @@ class SyncEngine(
             val seen = pull()
             tellOthersChanges(seen)
             adoptImportedReminders()
-            deferredUntil?.let { (it - now()).coerceAtLeast(0) }
+            // The pull queued a list again (see [remakeList]): push it straight away.
+            if (requeued) 0L else deferredUntil?.let { (it - now()).coerceAtLeast(0) }
         }
     }
 
@@ -108,12 +133,14 @@ class SyncEngine(
                 continue
             }
             withContext(NonCancellable) {
+                // False keeps the op queued for a later round.
+                var done = true
                 try {
                     when (op.kind) {
-                        OutboxEntity.Kind.CREATE -> pushCreate(op.rowId)
+                        OutboxEntity.Kind.CREATE -> done = pushCreate(op.rowId)
                         OutboxEntity.Kind.UPDATE -> pushUpdate(op.rowId)
                         OutboxEntity.Kind.DELETE -> pushDelete(op.rowId)
-                        OutboxEntity.Kind.LIST_CREATE -> pushListCreate(op.rowId)
+                        OutboxEntity.Kind.LIST_CREATE -> done = pushListCreate(op.rowId)
                         OutboxEntity.Kind.LIST_UPDATE -> pushListUpdate(op.rowId)
                         OutboxEntity.Kind.LIST_DELETE -> pushListDelete(op.rowId)
                         OutboxEntity.Kind.LIST_MOVE -> pushListMove(op)
@@ -126,31 +153,51 @@ class SyncEngine(
                 } catch (e: DeckException) {
                     // 5xx and auth problems: stop and let WorkManager retry later.
                     if (e.status >= 500 || e.status == 401) throw e
-                    // Other 4xx (gone, no permission): this op can never succeed.
-                    dropFailed(op, e.status)
+                    // Other 4xx (gone, no permission): this op will not succeed as it is.
+                    done = refused(op, e)
                 }
-                dao.dequeue(op.id)
+                if (done) {
+                    dao.dequeue(op.id)
+                } else {
+                    val at = now() + RETRY_LATER_MS
+                    dao.setNotBefore(op.id, at)
+                    deferredUntil = minOf(deferredUntil ?: Long.MAX_VALUE, at)
+                }
             }
         }
         return deferredUntil
     }
 
-    /**
-     * A task that cannot reach the server is dropped here, as is a list or group that could
-     * not be created. Any other refused change to a list or group is undone by fetching
-     * every board again on this round's pull.
-     */
-    private suspend fun dropFailed(op: OutboxEntity, status: Int) {
-        when (op.kind) {
-            in OutboxEntity.Kind.TASK -> if (status == 404 || status == 403) dao.deleteTask(op.rowId)
-            OutboxEntity.Kind.LIST_CREATE -> dao.deleteList(op.rowId)
-            OutboxEntity.Kind.GROUP_CREATE -> dao.deleteGroup(op.rowId)
-            else -> refetchAll = true
+    /** Handles a refused op as [refusal] says; returns whether the op is done with. */
+    private suspend fun refused(op: OutboxEntity, e: DeckException): Boolean {
+        val what = refusal(op.kind, e.status)
+        log("${op.kind} ${describe(op)} geweigerd: ${e.message.orEmpty().take(200)} → $what")
+        when (what) {
+            Refusal.POSTPONE -> return false
+            Refusal.REFETCH -> refetchAll = true
+            Refusal.DELETE_LOCAL -> dao.deleteTask(op.rowId)
+            Refusal.UNDELETE -> {
+                dao.task(op.rowId)?.let { dao.updateTask(it.copy(deleted = false)) }
+                refetchAll = true
+            }
         }
+        return true
     }
 
-    /** Set when the server refused a change to a list or group, see [dropFailed]. */
+    private suspend fun describe(op: OutboxEntity): String = when (op.kind) {
+        in OutboxEntity.Kind.TASK -> dao.task(op.rowId)?.title
+        in OutboxEntity.Kind.LIST -> dao.listNow(op.rowId)?.title
+        else -> dao.group(op.rowId)?.title
+    }.let { "„${it ?: "?"}” (${op.rowId})" }
+
+    /** Set when the server refused a change, see [refused]. */
     private var refetchAll = false
+
+    /** Tasks whose card this round's push made, for [pullBoard]. */
+    private val createdThisRound = mutableSetOf<Long>()
+
+    /** Set when the pull queued ops again, see [remakeList]. */
+    private var requeued = false
 
     private class Target(val group: GroupEntity, val boardId: Long, val stackId: Long)
 
@@ -161,22 +208,42 @@ class SyncEngine(
         return Target(group, group.serverId ?: return null, list.serverId ?: return null)
     }
 
-    private suspend fun pushCreate(taskId: Long) {
-        val task = dao.task(taskId) ?: return
-        if (task.serverId != null) return
-        val t = target(task) ?: return
-        val sent = task.toState()
-        var card = client.createCard(t.boardId, t.stackId, task.title, task.order, task.description, sent.dueEpochSecond?.let(Instant::ofEpochSecond))
-        if (sent.done) {
-            card = client.updateCard(
-                t.boardId, t.stackId, card.id, card.title, card.ownerUid ?: "", card.order,
-                task.description, sent.dueEpochSecond?.let(Instant::ofEpochSecond), Instant.ofEpochSecond(sent.doneEpochSecond!!),
-            )
+    /** Returns false while the task's list or group still waits for its own create. */
+    private suspend fun pushCreate(taskId: Long): Boolean {
+        val task = dao.task(taskId) ?: return true
+        if (task.serverId != null) return true
+        val list = dao.listNow(task.listId)?.takeIf { !it.deleted } ?: return true
+        val group = dao.group(list.homeGroupId)?.takeIf { !it.deleted } ?: return true
+        val t = target(task) ?: run {
+            log("CREATE „${task.title}” wacht op lijst „${list.title}” (${list.serverId}) / groep „${group.title}” (${group.serverId})")
+            return false
         }
-        if (sent.important) setImportant(t, card.id, true)
-        sent.assignees.forEach { client.assignUser(t.boardId, t.stackId, card.id, it) }
-        val final = client.card(t.boardId, t.stackId, card.id)
-        writeBack(task, sent, final) { it.copy(serverId = final.id, ownerUid = final.ownerUid) }
+        val sent = task.toState()
+        val created = client.createCard(t.boardId, t.stackId, task.title, task.order, task.description, sent.dueEpochSecond?.let(Instant::ofEpochSecond))
+        createdThisRound += task.id
+        try {
+            var card = created
+            if (sent.done) {
+                card = client.updateCard(
+                    t.boardId, t.stackId, card.id, card.title, card.ownerUid ?: "", card.order,
+                    task.description, sent.dueEpochSecond?.let(Instant::ofEpochSecond), Instant.ofEpochSecond(sent.doneEpochSecond!!),
+                )
+            }
+            if (sent.important) setImportant(t, card.id, true)
+            sent.assignees.forEach { client.assignUser(t.boardId, t.stackId, card.id, it) }
+            val final = client.card(t.boardId, t.stackId, card.id)
+            writeBack(task, sent, final) { it.copy(serverId = final.id, ownerUid = final.ownerUid) }
+        } catch (e: IOException) {
+            // The card exists now, so it must never be created again: keep its id and leave
+            // the rest (done, important, assignees) to an UPDATE, which merges from the card as made.
+            dao.task(task.id)?.let {
+                dao.updateTask(it.copy(serverId = created.id, ownerUid = created.ownerUid, serverLastModified = created.lastModified, base = encodeBase(created.toState(t.group.importantLabelId))))
+            }
+            if (dao.pendingOfKind(task.id, OutboxEntity.Kind.UPDATE) == 0) dao.enqueue(OutboxEntity(kind = OutboxEntity.Kind.UPDATE, rowId = task.id))
+            if (e !is DeckException || e.status >= 500 || e.status == 401) throw e
+            log("CREATE „${task.title}” gemaakt als kaart ${created.id}, maar daarna geweigerd: ${e.message.orEmpty().take(200)}")
+        }
+        return true
     }
 
     private suspend fun pushUpdate(taskId: Long) {
@@ -214,13 +281,16 @@ class SyncEngine(
 
     // ---------------------------------------------------------------- push: lists and groups
 
-    private suspend fun pushListCreate(listId: Long) {
-        val list = dao.listNow(listId) ?: return
-        if (list.serverId != null || list.deleted) return
-        val group = dao.group(list.groupId) ?: return
-        val stack = client.createStack(group.serverId ?: return, list.title, list.order)
+    /** Returns false while the list's group still waits for its own create. */
+    private suspend fun pushListCreate(listId: Long): Boolean {
+        val list = dao.listNow(listId) ?: return true
+        if (list.serverId != null || list.deleted) return true
+        val group = dao.group(list.groupId)?.takeIf { !it.deleted } ?: return true
+        val boardId = group.serverId ?: return false
+        val stack = client.createStack(boardId, list.title, list.order)
         // Fresh row: a rename while this was in flight queued its own LIST_UPDATE.
         dao.listNow(listId)?.let { dao.updateList(it.copy(serverId = stack.id, serverGroupId = group.id.takeIf { g -> g != it.groupId })) }
+        return true
     }
 
     private suspend fun pushListUpdate(listId: Long) {
@@ -410,7 +480,10 @@ class SyncEngine(
         }
 
         val live = boards.map { it.id }.toSet()
-        dao.allGroups().filter { it.serverId != null && it.serverId !in live }.forEach { dao.deleteGroup(it.id) }
+        dao.allGroups().filter { it.serverId != null && it.serverId !in live }.forEach {
+            log("Groep „${it.title}” (${it.serverId}) staat niet meer in Deck: hier ook verwijderd")
+            dao.deleteGroup(it.id)
+        }
 
         prefs.edit()
             .putString(KEY_BOARDS_ETAG, fetched.etag)
@@ -464,14 +537,45 @@ class SyncEngine(
         for (list in dao.listsOf(groupId)) {
             if (dao.pendingForList(list.id) > 0) continue
             if (list.serverId != null && list.serverId !in liveStacks) {
-                dao.deleteList(list.id)
+                // Tasks typed here that never reached a live stack: either their create is still
+                // queued, or this round put them in a stack that was being removed.
+                val unsent = dao.tasksOf(list.id).filter { !it.deleted && (it.serverId == null || it.id in createdThisRound) }
+                if (unsent.isEmpty()) {
+                    log("Lijst „${list.title}” (${list.serverId}) staat niet meer in Deck: hier ook verwijderd")
+                    dao.deleteList(list.id)
+                } else {
+                    remakeList(list, unsent)
+                }
                 continue
             }
             for (task in dao.tasksOf(list.id)) {
                 val gone = task.serverId != null && task.serverId !in seenCards
-                if (gone && dao.pendingFor(task.id) == 0) dao.deleteTask(task.id)
+                if (gone && dao.pendingFor(task.id) == 0) {
+                    log("Taak „${task.title}” (${task.serverId}) in „${list.title}” staat niet meer in Deck: hier ook verwijderd")
+                    dao.deleteTask(task.id)
+                }
             }
         }
+    }
+
+    /**
+     * The list's stack went from the server (removed, or moved to another group, by someone
+     * else) while it held tasks typed on this phone that never got there. Rather than lose
+     * them with the list, the list is made again in its group with just those tasks; the
+     * others went with the stack. Their creates are queued again after the list's own.
+     */
+    private suspend fun remakeList(list: ListEntity, unsent: List<TaskEntity>) {
+        log("Lijst „${list.title}” (${list.serverId}) staat niet meer in Deck; opnieuw gemaakt voor ${unsent.size} taken van deze telefoon: ${unsent.joinToString { "„${it.title}”" }}")
+        val keep = unsent.map { it.id }.toSet()
+        dao.tasksOf(list.id).filter { it.id !in keep }.forEach { dao.deleteTask(it.id) }
+        dao.updateList(list.copy(serverId = null, serverGroupId = null))
+        dao.enqueue(OutboxEntity(kind = OutboxEntity.Kind.LIST_CREATE, rowId = list.id))
+        for (task in unsent) {
+            OutboxEntity.Kind.TASK.forEach { dao.dropPending(task.id, it) }
+            dao.updateTask(task.copy(serverId = null, serverLastModified = 0, base = null))
+            dao.enqueue(OutboxEntity(kind = OutboxEntity.Kind.CREATE, rowId = task.id))
+        }
+        requeued = true
     }
 
     // ---------------------------------------------------------------- others' changes
@@ -534,6 +638,8 @@ class SyncEngine(
         const val KEY_BOARDS_ETAG = "boardsEtag4"
         const val KEY_UNSETTLED = "unsettled"
         const val KEY_LAST_ACTIVITY = "lastActivity"
+        /** How long an op the server refused, or one waiting for its list or group, waits before the next try. */
+        const val RETRY_LATER_MS = 30 * 60 * 1000L
         const val ACTIVITY_PAGE = 100
         const val MAX_ACTIVITY_PAGES = 5
     }

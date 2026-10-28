@@ -19,8 +19,10 @@ import app.vinkje.deck.LoginCredentials
 import app.vinkje.reminders.Reminders
 import app.vinkje.sync.CredentialStore
 import app.vinkje.sync.SyncEngine
+import app.vinkje.sync.SyncLog
 import app.vinkje.sync.SyncScheduler
 import app.vinkje.sync.syncLock
+import java.io.File
 
 /** Hand-wired dependencies; the app is small enough not to need a DI framework. */
 class TodoApp : Application() {
@@ -29,6 +31,7 @@ class TodoApp : Application() {
     val reminders by lazy { Reminders(this) }
     val session by lazy { Session(getSharedPreferences("sync", Context.MODE_PRIVATE)) }
     val changes by lazy { ChangeNotifications(this) { foreground } }
+    val syncLog by lazy { SyncLog(File(filesDir, "sync.log")) }
     val repository by lazy { TodoRepository(db.dao(), scheduler, reminders, session, getSharedPreferences("ui", Context.MODE_PRIVATE), deck = ::client) }
 
     /** Set by MainActivity while it is on screen. */
@@ -102,6 +105,7 @@ class TodoApp : Application() {
             // A list id from before would point at someone else's list after the wipe.
             getSharedPreferences("ui", Context.MODE_PRIVATE).edit().remove("defaultList").commit()
             changes.clear()
+            syncLog.clear()
         }
     }
 
@@ -119,6 +123,7 @@ class TodoApp : Application() {
             changes = changes,
             notifyAs = { DevNotify.pretendUid(this) ?: session.selfUid.value },
             adoptReminder = repository::setReminder,
+            log = syncLog::add,
         )
     }
 }

@@ -15,4 +15,4 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
-      - run: ./gradlew :domain:test :deck-api:test :importer:test :app:assembleDebug --console=plain
+      - run: ./gradlew :domain:test :deck-api:test :importer:test :app:testDebugUnitTest :app:assembleDebug --console=plain

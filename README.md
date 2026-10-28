@@ -153,7 +153,7 @@ stays deleted. `state.json` holds the To Do id → Deck id mapping that makes th
 
 ```sh
 nix develop          # JDK 17 + Android SDK 36
-./gradlew :domain:test :app:assembleDebug
+./gradlew :domain:test :app:testDebugUnitTest :app:assembleDebug
 ```
 
 On NixOS the devShell points AGP at the patched `aapt2` from `androidenv`; the
@@ -210,6 +210,17 @@ every 15 minutes, and whenever the network returns) pushes the outbox in order, 
 pulls. A push whose card changed on the server since the last sync is merged three-way
 (`domain/Merge.kt`): ticked steps from both phones survive. Pulls use the board-list
 ETag, so a sync with no changes costs one 304.
+
+A change the server refuses (a 4xx other than 401) never costs what was typed on this
+phone. A new task, list or group stays here and is tried again half an hour later, so a
+404 from a proxy or a Deck app halfway through an update does no harm; a refused edit is
+dropped and the server's version comes back. A list whose stack disappears from the server
+(removed or moved to another group by someone else) while it holds tasks that never got
+there is made again in its group with just those tasks. A card that was made but whose
+round was cut short keeps its id, so it is never made twice.
+
+"Synclogboek" in the home screen's menu shows what was refused or removed lately (the
+last 300 lines, kept on the phone only), with a button to share it.
 
 ## Disclaimer
 
