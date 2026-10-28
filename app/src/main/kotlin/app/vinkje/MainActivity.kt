@@ -102,7 +102,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        (application as TodoApp).apply { foreground = true; changes.clear() }
+        // Also when coming back to a process still alive: else others' changes wait for the periodic sync.
+        (application as TodoApp).apply { foreground = true; changes.clear(); scheduler.kick(delayMs = 0) }
     }
 
     override fun onStop() {
