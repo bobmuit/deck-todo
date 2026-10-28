@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
                                 loginExpired = loginExpired,
                                 onLogInAgain = { nav.navigate("login") },
                                 onLogOut = app::logOut,
+                                readSyncLog = app.syncLog::read,
                             )
                         }
                         composable("login") {

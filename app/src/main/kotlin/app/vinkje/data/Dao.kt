@@ -161,6 +161,7 @@ interface TodoDao {
     @Query("SELECT COUNT(*) FROM outbox WHERE rowId = :rowId AND kind = :kind") suspend fun pendingOfKind(rowId: Long, kind: OutboxEntity.Kind): Int
     @Query("DELETE FROM outbox WHERE rowId = :rowId AND kind = :kind") suspend fun dropPending(rowId: Long, kind: OutboxEntity.Kind)
     @Query("UPDATE outbox SET arg = :arg WHERE id = :id") suspend fun setArg(id: Long, arg: String?)
+    @Query("UPDATE outbox SET notBefore = :at WHERE id = :id") suspend fun setNotBefore(id: Long, at: Long)
     @Query("SELECT COUNT(*) FROM outbox") fun pendingCount(): Flow<Int>
 
     /** A local edit: save the row with a bumped version and queue one UPDATE (or none if a CREATE is still queued). */
