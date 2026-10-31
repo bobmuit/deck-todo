@@ -49,6 +49,19 @@ My Day and reminders are personal in To Do, and each of us has one phone, so the
 next to the task in the local database. A reinstall loses them; moving them into a
 per-user `/.todo-app/state.json` over WebDAV is the plan if that ever matters.
 
+## Sharing to Vinkje
+
+"Taak toevoegen" (with Vinkje's icon) is in Android's share menu for text. It opens a
+sheet over the app shared from: the title, and the lists that can take a new task, the
+ones outside a group first and then each group. "Toevoegen" puts the task on top of
+that list and returns to the other app; like everything else it is saved on the phone
+first, so it works offline. The list picked is remembered, and is also where tasks
+typed into a smart list go.
+
+A shared subject (Chrome sends the page title) becomes the title and the text (the link)
+the note. Without a subject the first line is the title and the rest the note. A title
+longer than Deck's 255 characters is cut, with the whole text kept in the note.
+
 ## Repeating tasks and reminders
 
 Ticking off a repeating task does what To Do does: the ticked card keeps its note and

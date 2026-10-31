@@ -26,6 +26,22 @@
             </intent-filter>
         </activity>
 
+        <!-- "Taak toevoegen" in the share menu: a sheet over the app shared from, gone from Recents afterwards. -->
+        <activity
+            android:name=".share.ShareActivity"
+            android:exported="true"
+            android:label="@string/share_label"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
         <receiver android:name=".reminders.ReminderReceiver" android:exported="false" />
         <receiver android:name=".changes.ChangesDismissedReceiver" android:exported="false" />
         <receiver android:name=".reminders.CompleteReceiver" android:exported="false" />
